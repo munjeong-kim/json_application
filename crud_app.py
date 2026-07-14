@@ -9,6 +9,22 @@ import os
 
 DB_FILE = "db.json"
 
+# orjson은 64비트 정수 범위를 벗어나면 dumps 시 TypeError를 던지므로 입력 단계에서 막는다.
+MAX_SAFE_INT = 2**63 - 1
+
+
+def parse_age(value):
+    """age 입력값을 int로 변환. 실패하면 (None, 에러메시지)를 반환한다."""
+    if not value:
+        return None, None
+    try:
+        age = int(value)
+    except ValueError:
+        return None, "age는 숫자여야 합니다."
+    if abs(age) > MAX_SAFE_INT:
+        return None, "age 값이 너무 큽니다."
+    return age, None
+
 
 def load_data():
     if not os.path.exists(DB_FILE):
@@ -17,7 +33,15 @@ def load_data():
         content = f.read()
     if not content:
         return []
-    return orjson.loads(content)
+    try:
+        data = orjson.loads(content)
+    except orjson.JSONDecodeError:
+        print("경고: db.json 파일이 손상되어 있습니다. 빈 목록으로 시작합니다.")
+        return []
+    if not isinstance(data, list):
+        print("경고: db.json의 형식이 올바르지 않습니다. 빈 목록으로 시작합니다.")
+        return []
+    return data
 
 
 def save_data(data):
@@ -26,14 +50,15 @@ def save_data(data):
 
 
 def next_id(data):
-    if not data:
+    ids = [record.get("id", 0) for record in data]
+    if not ids:
         return 1
-    return max(record["id"] for record in data) + 1
+    return max(ids) + 1
 
 
 def find_by_id(data, record_id):
     for record in data:
-        if record["id"] == record_id:
+        if record.get("id") == record_id:
             return record
     return None
 
@@ -49,11 +74,16 @@ def create_record():
     is_active_input = input("is_active (y/n): ").strip().lower()
     tags_input = input("tags (comma-separated, 생략 가능): ").strip()
 
+    age, error = parse_age(age_input)
+    if error:
+        print(f"{error} 생성을 취소합니다.")
+        return
+
     record = {
         "id": next_id(data),
         "name": name,
         "email": email,
-        "age": int(age_input) if age_input else None,
+        "age": age,
         "is_active": is_active_input == "y",
         "tags": [t.strip() for t in tags_input.split(",") if t.strip()],
     }
@@ -82,7 +112,7 @@ def read_one():
         record = find_by_id(data, int(key))
         results = [record] if record else []
     else:
-        results = [r for r in data if key.lower() in r["name"].lower()]
+        results = [r for r in data if key.lower() in r.get("name", "").lower()]
 
     if not results:
         print("일치하는 데이터가 없습니다.")
@@ -116,7 +146,11 @@ def update_record():
     new_value = input(f"새로운 {field} 값: ").strip()
 
     if field == "age":
-        record[field] = int(new_value) if new_value else None
+        age, error = parse_age(new_value)
+        if error:
+            print(f"{error} 수정을 취소합니다.")
+            return
+        record[field] = age
     elif field == "is_active":
         record[field] = new_value.lower() == "y"
     elif field == "tags":
@@ -149,7 +183,7 @@ def delete_record():
         print("삭제를 취소했습니다.")
         return
 
-    data = [r for r in data if r["id"] != record_id]
+    data = [r for r in data if r.get("id") != record_id]
     save_data(data)
     print("삭제 완료")
 
